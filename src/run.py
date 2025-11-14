@@ -3,7 +3,7 @@ from itertools import chain
 import hydra
 import torch
 from omegaconf import OmegaConf
-
+import os
 from utils import seed_everything
 
 
@@ -13,6 +13,7 @@ from utils import seed_everything
     version_base=None,
 )
 def main(cfg):
+    os.environ["HYDRA_FULL_ERROR"]='1'
     # print out the full config
     print(OmegaConf.to_yaml(cfg))
 

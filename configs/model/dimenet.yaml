@@ -1,0 +1,8 @@
+defaults:
+  - _self_
+
+name: DimeNetpp
+
+init:
+  _target_: models.DimeNetpp
+  _partial_: false
