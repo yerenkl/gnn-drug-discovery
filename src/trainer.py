@@ -53,6 +53,7 @@ class SemiSupervisedEnsemble:
 
     def train(self, total_epochs, validation_interval):
         #self.logger.log_dict()
+        results = []
         for epoch in (pbar := tqdm(range(1, total_epochs + 1))):
             for model in self.models:
                 model.train()
@@ -77,4 +78,6 @@ class SemiSupervisedEnsemble:
                 val_metrics = self.validate()
                 summary_dict.update(val_metrics)
                 pbar.set_postfix(summary_dict)
+                results.append(val_metrics["val_MSE"])
             self.logger.log_dict(summary_dict, step=epoch)
+        return results
