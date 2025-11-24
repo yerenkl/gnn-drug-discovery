@@ -27,13 +27,13 @@ class GCN(nn.Module):
         return x
 
 class DimeNetpp(nn.Module):
-    def __init__(self, hidden_channels=64):
+    def __init__(self, hidden_channels = 64, num_blocks = 6):
         super(DimeNetpp, self).__init__()
         self.dimenet = DimeNetPlusPlus(hidden_channels=hidden_channels, 
                                         out_channels=1, 
                                         num_spherical=7,
                                         num_radial=6, 
-                                        num_blocks=6,
+                                        num_blocks=num_blocks,
                                         int_emb_size=64,
                                         basis_emb_size=8,
                                         out_emb_channels=256)

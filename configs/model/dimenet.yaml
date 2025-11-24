@@ -6,3 +6,5 @@ name: DimeNetpp
 init:
   _target_: models.DimeNetpp
   _partial_: false
+  hidden_channels: 64
+  num_blocks: 6
