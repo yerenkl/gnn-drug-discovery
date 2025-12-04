@@ -6,7 +6,6 @@ from omegaconf import OmegaConf
 import os
 from utils import seed_everything
 
-
 @hydra.main(
     config_path="../configs/",
     config_name="run.yaml",
@@ -31,12 +30,11 @@ def main(cfg):
 
     dm = hydra.utils.instantiate(cfg.dataset.init)
 
-    teacher_model = hydra.utils.instantiate(cfg.model.init).to(device)
-    student_model = hydra.utils.instantiate(cfg.model.init).to(device)
+    model = hydra.utils.instantiate(cfg.model.init).to(device)
 
     if cfg.compile_model:
-        student_model = torch.compile(student_model)
-    models = [teacher_model, student_model]
+        model = torch.compile(model)
+    models = [model]
     trainer = hydra.utils.instantiate(cfg.trainer.init, models=models, logger=logger, datamodule=dm, device=device)
 
     results = trainer.train(**cfg.trainer.train)

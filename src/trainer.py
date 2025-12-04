@@ -14,13 +14,14 @@ class SemiSupervisedEnsemble:
         models,
         logger,
         datamodule,
+        normalize=False,
     ):
         self.device = device
-        self.models = models
 
-        # Optim related things
         self.supervised_criterion = supervised_criterion
-        all_params = [p for m in self.models for p in m.parameters()]
+        self.model = models[0]
+        self.normalize = normalize
+        all_params = [p for p in self.model.parameters()]
         self.optimizer = optimizer(params=all_params)
         self.scheduler = scheduler(optimizer=self.optimizer)
 
@@ -29,12 +30,22 @@ class SemiSupervisedEnsemble:
         self.val_dataloader = datamodule.val_dataloader()
         self.test_dataloader = datamodule.test_dataloader()
 
+        # std and mean for normalization    
+        all_targets = []
+        with torch.no_grad():
+            for _, targets in tqdm(self.train_dataloader):
+                all_targets.append(targets.float().cpu())
+            targets_tensor = torch.cat(all_targets, dim=0)
+            mean_val = targets_tensor.mean().item()
+            std_val = targets_tensor.std().item()
+        self.target_mean = torch.tensor(mean_val, dtype=torch.float32, device=self.device)
+        self.target_std = torch.tensor(std_val, dtype=torch.float32, device=self.device)
+
         # Logging
         self.logger = logger
 
     def validate(self):
-        for model in self.models:
-            model.eval()
+        self.model.eval()
 
         val_losses = []
         
@@ -43,7 +54,7 @@ class SemiSupervisedEnsemble:
                 x, targets = x.to(self.device), targets.to(self.device)
                 
                 # Ensemble prediction
-                preds = [model(x) for model in self.models]
+                preds = [(self.model(x) * self.target_std) + self.target_mean] if self.normalize else [self.model(x)]
                 avg_preds = torch.stack(preds).mean(0)
                 
                 val_loss = torch.nn.functional.mse_loss(avg_preds, targets)
@@ -55,18 +66,20 @@ class SemiSupervisedEnsemble:
         #self.logger.log_dict()
         results = []
         for epoch in (pbar := tqdm(range(1, total_epochs + 1))):
-            for model in self.models:
-                model.train()
+            self.model.train()
             supervised_losses_logged = []
             for x, targets in self.train_dataloader:
                 x, targets = x.to(self.device), targets.to(self.device)
                 self.optimizer.zero_grad()
                 # Supervised loss
-                supervised_losses = [self.supervised_criterion(model(x), targets) for model in self.models]
+                predictions = self.model(x)
+                if self.normalize:
+                    targets = (targets - self.target_mean) / self.target_std
+                supervised_losses = [self.supervised_criterion(predictions, targets)]
                 supervised_loss = sum(supervised_losses)
-                supervised_losses_logged.append(supervised_loss.detach().item() / len(self.models))  # type: ignore
+                supervised_losses_logged.append(supervised_loss.detach().item())  
                 loss = supervised_loss
-                loss.backward()  # type: ignore
+                loss.backward() 
                 self.optimizer.step()
             self.scheduler.step()
             supervised_losses_logged = np.mean(supervised_losses_logged)
