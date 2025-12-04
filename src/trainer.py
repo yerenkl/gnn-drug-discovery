@@ -1,8 +1,8 @@
 from functools import partial
-
 import numpy as np
 import torch
 from tqdm import tqdm
+from copy import deepcopy
 
 class SemiSupervisedEnsemble:
     def __init__(
@@ -43,54 +43,84 @@ class SemiSupervisedEnsemble:
 
         # Logging
         self.logger = logger
+        
+    def evaluate(self, dataloader):
+            self.model.eval()
+
+            all_preds = []
+            all_targets = []
+            
+            with torch.no_grad():
+                for x, targets in dataloader:
+                    x, targets = x.to(self.device), targets.to(self.device)
+                    
+                    preds = [(self.model(x) * self.target_std) + self.target_mean] if self.normalize else [self.model(x)]
+                    avg_preds = torch.stack(preds).mean(0)
+
+                    all_preds.append(avg_preds.cpu())
+                    all_targets.append(targets.cpu())
+
+            preds_tensor = torch.cat(all_preds, dim=0)
+            targets_tensor = torch.cat(all_targets, dim=0)
+            
+            mse = torch.nn.functional.mse_loss(preds_tensor, targets_tensor).item()
+            return {"val_MSE": mse}
 
     def validate(self):
-        self.model.eval()
-
-        val_losses = []
-        
-        with torch.no_grad():
-            for x, targets in self.val_dataloader:
-                x, targets = x.to(self.device), targets.to(self.device)
-                
-                # Ensemble prediction
-                preds = [(self.model(x) * self.target_std) + self.target_mean] if self.normalize else [self.model(x)]
-                avg_preds = torch.stack(preds).mean(0)
-                
-                val_loss = torch.nn.functional.mse_loss(avg_preds, targets)
-                val_losses.append(val_loss.item())
-        val_loss = np.mean(val_losses)
-        return {"val_MSE": val_loss}
+        return self.evaluate(self.val_dataloader)
 
     def train(self, total_epochs, validation_interval):
-        #self.logger.log_dict()
         results = []
+        best_val_loss = float('inf')
+        best_model_state = deepcopy(self.model.state_dict())  
+
         for epoch in (pbar := tqdm(range(1, total_epochs + 1))):
             self.model.train()
             supervised_losses_logged = []
+
             for x, targets in self.train_dataloader:
                 x, targets = x.to(self.device), targets.to(self.device)
                 self.optimizer.zero_grad()
-                # Supervised loss
+
                 predictions = self.model(x)
                 if self.normalize:
-                    targets = (targets - self.target_mean) / self.target_std
-                supervised_losses = [self.supervised_criterion(predictions, targets)]
-                supervised_loss = sum(supervised_losses)
-                supervised_losses_logged.append(supervised_loss.detach().item())  
-                loss = supervised_loss
-                loss.backward() 
+                    targets_norm = (targets - self.target_mean) / self.target_std
+                else:
+                    targets_norm = targets
+
+                supervised_loss = self.supervised_criterion(predictions, targets_norm)
+                supervised_losses_logged.append(supervised_loss.detach().item())
+
+                supervised_loss.backward()
                 self.optimizer.step()
+
             self.scheduler.step()
-            supervised_losses_logged = np.mean(supervised_losses_logged)
+            avg_supervised_loss = np.mean(supervised_losses_logged)
 
             summary_dict = {
-                "supervised_loss": supervised_losses_logged,
+                "supervised_loss": avg_supervised_loss,
             }
+
+            # Validation
             if epoch % validation_interval == 0 or epoch == total_epochs:
                 val_metrics = self.validate()
                 summary_dict.update(val_metrics)
                 pbar.set_postfix(summary_dict)
                 results.append(val_metrics["val_MSE"])
+
+                # Save best model
+                if val_metrics["val_MSE"] < best_val_loss:
+                    best_val_loss = val_metrics["val_MSE"]
+                    best_model_state = deepcopy(self.model.state_dict())
+
             self.logger.log_dict(summary_dict, step=epoch)
-        return results
+
+        # After training, load the best validation model
+        self.model.load_state_dict(best_model_state)
+        print(f"Best validation MSE: {best_val_loss:.6f}")
+
+        # Evaluate on test set with the best model
+        test_metrics = self.evaluate(self.test_dataloader)
+        print(f"Test MSE (best val model): {test_metrics['val_MSE']:.6f}")
+
+        return results, test_metrics
