@@ -43,3 +43,106 @@ class DimeNetpp(nn.Module):
         x = self.dimenet(z, pos, batch)
 
         return x
+
+class GIN3LayerGraphNormTrainEps(torch.nn.Module):
+    def __init__(self, num_node_features, hidden_channels=64):
+        super().__init__()
+
+        mlp1 = torch.nn.Sequential(
+            torch.nn.Linear(num_node_features, hidden_channels),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_channels, hidden_channels),
+        )
+        mlp2 = torch.nn.Sequential(
+            torch.nn.Linear(hidden_channels, hidden_channels),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_channels, hidden_channels),
+        )
+        mlp3 = torch.nn.Sequential(
+            torch.nn.Linear(hidden_channels, hidden_channels),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_channels, hidden_channels),
+        )
+
+        self.conv1 = GINConv(mlp1, train_eps=True)
+        self.gn1 = GraphNorm(hidden_channels)
+
+        self.conv2 = GINConv(mlp2, train_eps=True)
+        self.gn2 = GraphNorm(hidden_channels)
+
+        self.conv3 = GINConv(mlp3, train_eps=True)
+        self.gn3 = GraphNorm(hidden_channels)
+
+        self.linear = torch.nn.Linear(hidden_channels, 1)
+
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+
+        x = self.conv1(x, edge_index)
+        x = self.gn1(x, batch)
+        x = F.relu(x)
+
+        x = self.conv2(x, edge_index)
+        x = self.gn2(x, batch)
+        x = F.relu(x)
+
+        x = self.conv3(x, edge_index)
+        x = self.gn3(x, batch)
+        x = F.relu(x)
+
+        x = global_mean_pool(x, batch)
+        x = self.linear(x)
+        return x
+
+class GAT3LayerGraphNorm(torch.nn.Module):
+    def __init__(self,
+                 num_node_features,
+                 hidden_channels: int = 64,
+                 heads: int = 4):
+        super().__init__()
+
+        out_per_head = hidden_channels // heads  # 64 / 4 = 16
+
+
+        self.conv1 = GATConv(
+            in_channels=num_node_features,
+            out_channels=out_per_head,
+            heads=heads,
+            concat=True,         
+        )
+        self.gn1 = GraphNorm(hidden_channels)
+        self.conv2 = GATConv(
+            in_channels=hidden_channels,
+            out_channels=out_per_head,
+            heads=heads,
+            concat=True,          
+        )
+        self.gn2 = GraphNorm(hidden_channels)
+        self.conv3 = GATConv(
+            in_channels=hidden_channels,
+            out_channels=hidden_channels,
+            heads=1,
+            concat=False,         
+        )
+        self.gn3 = GraphNorm(hidden_channels)
+
+        self.linear = torch.nn.Linear(hidden_channels, 1)
+
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+
+        x = self.conv1(x, edge_index)
+        x = self.gn1(x, batch)
+        x = F.relu(x)
+
+        x = self.conv2(x, edge_index)
+        x = self.gn2(x, batch)
+        x = F.relu(x)
+
+        x = self.conv3(x, edge_index)
+        x = self.gn3(x, batch)
+        x = F.relu(x)
+
+        x = global_mean_pool(x, batch)
+        x = self.linear(x)
+        return x
