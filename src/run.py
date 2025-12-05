@@ -30,12 +30,27 @@ def main(cfg):
     logger.init_run(hparams)
 
     dm = hydra.utils.instantiate(cfg.dataset.init)
+    models_list = []
+    if cfg.trainer.method == "ncps-train":
+        # Use multiple models (4 unless overridden)
+        num_models = cfg.trainer.num_models
 
-    model = hydra.utils.instantiate(cfg.model.init).to(device)
+        for _ in range(num_models):
+            model = hydra.utils.instantiate(cfg.model.init).to(device)
+            if cfg.compile_model:
+                model = torch.compile(model)
+            models_list.append(model)
 
+    else:
+        # Normal single model
+        model = hydra.utils.instantiate(cfg.model.init).to(device)
+        if cfg.compile_model:
+            model = torch.compile(model)
+        models_list = [model]
+        
     if cfg.compile_model:
         model = torch.compile(model)
-    models = [model]
+    models = models_list
     trainer = hydra.utils.instantiate(cfg.trainer.init, models=models, logger=logger, datamodule=dm, device=device)
 
     results = trainer.train(**cfg.trainer.train)
