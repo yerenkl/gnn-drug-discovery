@@ -31,7 +31,7 @@ pip install hydra-core omegaconf wandb pytorch-lightning numpy tqdm
 
 ## How to Run
 
-The main entry point for this project is `src/run.py`. It uses `hydra` for configuration management. Hydra is a broadly used and highly respected so I recommend using it. You can find a guide to it here https://medium.com/@jennytan5522/introduction-to-hydra-configuration-for-python-646e1dd4d1e9.
+The main entry point for this project is `src/run.py`. It uses `hydra` for configuration management.
 
 To run the code, execute the following command from the root of the project:
 
@@ -47,12 +47,67 @@ python src/run.py model=gcn
 
 The configuration files are located in the `configs/` directory.
 
-## Improving the predictive accuracy
-There are many ways to improve the GNN. Please try to get the validation error (MSE) as low as possible. I have not implemented the code to run on the test data. That is for you to do, but please wait until you have the final model.
-Here are some great resources:
-- Try different GNN architectures and layers see (https://pytorch-geometric.readthedocs.io/en/latest/modules/nn.html)
-- Try different optimizers and schedulers
-- Tune hyperparameters (especially learning rate, layers, and hidden units)
-- Use advanced regularization techniques such as https://openreview.net/forum?id=xkljKdGe4E#discussion
-- You can try changing the generated features of the dataloader
+
+## Mean Teacher (Semi-Supervised)
+
+Run the **Mean Teacher** semi-supervised training pipeline:
+
+```bash
+python ./src/run.py trainer=mean-teacher-train
+```
+
+This loads:
+
+```
+configs/trainer/mean-teacher-train.yaml
+```
+| Key                                  | Value                                         | Description                                                                   |
+| ------------------------------------ | --------------------------------------------- | ----------------------------------------------------------------------------- |
+| `train.total_epochs`                 | `100`                                         | Total number of training epochs.                                              |
+| `train.validation_interval`          | `10`                                          | Run validation every N epochs.                                                |
+| `init.noise_std`                     | `0.02`                                        | Standard deviation of Gaussian noise added to student inputs.                 |
+| `init.gamma_end`                     | `0.1`                                         | Final value of gamma for ramp scheduling (e.g., consistency weight).          |
+| `init.normalize`                     | `true`                                        | If true, normalizes model outputs/targets.                                    |
+| `init.alpha`                         | `0.99`                                        | EMA decay for the teacher model update.                                       |
+| `init.ramp_type`                     | `sigmoid`                                     | Ramp-up function type for consistency loss weighting.                         |
+| `init.supervised_criterion._target_` | `torch.nn.MSELoss`                            | Criterion used for the supervised component of the loss.                      |
+| `init.optimizer._target_`            | `torch.optim.AdamW`                           | Optimizer class used for training.                                            |
+| `init.optimizer._partial_`           | `true`                                        | Indicates Hydra should pass parameters later when constructing the optimizer. |
+| `init.optimizer.lr`                  | `0.001`                                       | Learning rate for the optimizer.                                              |
+| `init.optimizer.weight_decay`        | `0.005`                                       | Weight decay (L2 regularization).                                             |
+| `init.scheduler._target_`            | `torch.optim.lr_scheduler.StepLR`             | Scheduler class for adjusting learning rate.                                  |
+| `init.scheduler._partial_`           | `true`                                        | Hydra will pass parameters later when constructing the scheduler.             |
+| `init.scheduler.step_size`           | `1`                                           | Step interval for reducing the learning rate.                                 |
+| `init.scheduler.gamma`               | `0.975`                                       | Multiplicative LR decay factor applied at each step.                          |
+---
+
+## N-CPS Training (Semi-Supervised) 
+
+Run the **NCPS** training pipeline:
+
+```bash
+python ./src/run.py trainer=ncps-train
+```
+
+This loads:
+
+```
+configs/trainer/ncps-train.yaml
+```
+
+---
+
+## Fully Supervised Baseline
+
+Run the **fully supervised** baseline training mode:
+
+```bash
+python ./src/run.py trainer=fully-supervised-train
+```
+
+This loads:
+
+```
+configs/trainer/fully-supervised-train.yaml
+```
 
