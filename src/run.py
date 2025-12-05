@@ -5,6 +5,7 @@ import torch
 from omegaconf import OmegaConf
 import os
 from utils import seed_everything
+import models
 
 
 @hydra.main(
