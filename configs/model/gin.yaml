@@ -1,0 +1,11 @@
+defaults:
+  - _self_
+
+name: GIN_3Layer_GraphNorm_TrainEps_mse_target
+
+init:
+  _target_: models.GIN3LayerGraphNormTrainEps
+  _partial_: false
+  num_node_features: 11
+  hidden_channels: 64  
+

@@ -1,0 +1,11 @@
+defaults:
+  - _self_
+
+name: GAT_3layer_graph_mse_target
+
+init:
+  _target_: models.GAT3LayerGraphNorm
+  _partial_: false
+  num_node_features: 11
+  hidden_channels: 64  
+  heads: 4
