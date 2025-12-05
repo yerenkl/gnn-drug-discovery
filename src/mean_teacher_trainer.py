@@ -63,8 +63,15 @@ class SemiSupervisedEnsemble:
 
         # Logging
         self.logger = logger
+
+    def test(self):
         
+        return self.evaluate(self.test_dataloader)
+
     def validate(self):
+        return self.evaluate(self.val_dataloader)
+        
+    def evaluate(self, dataloader):
         self.teacher_model.eval()
         self.student_model.eval()
 
@@ -72,36 +79,33 @@ class SemiSupervisedEnsemble:
         student_losses = []
 
         with torch.no_grad():
-            for x, targets in self.val_dataloader:
+            for x, targets in dataloader:
                 x = x.to(self.device)
                 targets = targets.to(self.device).float()
 
-                
                 teacher_pred = (self.teacher_model(x) * self.target_std) + self.target_mean if self.normalize else self.teacher_model(x)
                 student_pred = (self.student_model(x) * self.target_std) + self.target_mean if self.normalize else self.student_model(x)
 
                 teacher_loss = torch.nn.functional.mse_loss(teacher_pred, targets)
-                teacher_losses.append(teacher_loss.item())
-
                 student_loss = torch.nn.functional.mse_loss(student_pred, targets)
+
+                teacher_losses.append(teacher_loss.item())
                 student_losses.append(student_loss.item())
 
         return {
-            "val_MSE_teacher": float(np.mean(teacher_losses)),
-            "val_MSE_student": float(np.mean(student_losses)),
+            "MSE_teacher": float(np.mean(teacher_losses)),
+            "MSE_student": float(np.mean(student_losses)),
         }
-
+    
     def train(self, total_epochs, validation_interval):
         results = []
         self.consistency_loss_fn = torch.nn.MSELoss()
         
-        ramp_epochs = int(total_epochs * 0.3)
+        ramp_epochs = 30
+        best_val_loss = float('inf')
+        best_teacher_state = deepcopy(self.teacher_model.state_dict())  
 
-        # Initialize iterator safely
-        if self.un_train_dataloader:
-            unsupervised_loader_iterator = iter(self.un_train_dataloader)
-        else:
-            unsupervised_loader_iterator = None
+        unsupervised_loader_iterator = iter(self.un_train_dataloader) if self.un_train_dataloader else None
 
         for epoch in (pbar := tqdm(range(1, total_epochs + 1))):
             total_supervised = 0
@@ -109,7 +113,8 @@ class SemiSupervisedEnsemble:
 
             self.student_model.train()
             self.teacher_model.eval()
-            
+
+            # Ramp-up value
             if self.ramp_type == 'sigmoid':
                 rampup_val = sigmoid_rampup(epoch, ramp_epochs)
             elif self.ramp_type == 'linear':
@@ -119,29 +124,27 @@ class SemiSupervisedEnsemble:
             else:
                 rampup_val = 1.0
 
-            for (x_s, targets) in self.train_dataloader:
+            for x_s, targets in self.train_dataloader:
                 self.optimizer.zero_grad()
-                
                 try:
                     x_u, _ = next(unsupervised_loader_iterator)
                 except StopIteration:
                     unsupervised_loader_iterator = iter(self.un_train_dataloader)
                     x_u, _ = next(unsupervised_loader_iterator)
-                    
+
                 x_s, x_u, targets = x_s.to(self.device), x_u.to(self.device), targets.to(self.device)
-                if self.normalize==True:
+                if self.normalize:
                     targets = (targets - self.target_mean) / self.target_std
+
                 x_u_noisy = add_noise_(x_u, sigma=self.noise_std)
 
                 pred_s = self.student_model(x_s)
                 pred_u = self.student_model(x_u_noisy)
-
                 with torch.no_grad():
                     teacher_pred = self.teacher_model(x_u)
 
                 class_loss = self.supervised_criterion(pred_s, targets)
                 consistency_loss = self.consistency_loss_fn(pred_u, teacher_pred)
-
                 total_loss = class_loss + self.gamma_end * rampup_val * consistency_loss
 
                 total_loss.backward()
@@ -151,7 +154,6 @@ class SemiSupervisedEnsemble:
                 with torch.no_grad():
                     for t_param, s_param in zip(self.teacher_model.parameters(), self.student_model.parameters()):
                         t_param.data.mul_(self.alpha).add_(s_param.data, alpha=(1 - self.alpha))
-                        
                     for t_buffer, s_buffer in zip(self.teacher_model.buffers(), self.student_model.buffers()):
                         t_buffer.data.mul_(self.alpha).add_(s_buffer.data, alpha=1.0 - self.alpha)
 
@@ -161,30 +163,42 @@ class SemiSupervisedEnsemble:
             avg_sup_loss = total_supervised / len(self.train_dataloader)
             avg_cons_loss = total_consistency / len(self.train_dataloader)
 
-            print(f"Epoch {epoch}: Sup Loss {avg_sup_loss:.4f}, Cons Loss {avg_cons_loss:.4f}")
-
             summary_dict = {
                 "supervised_loss": avg_sup_loss,
                 "consistency_loss": avg_cons_loss,
             }
 
-            val_metrics = {}
             if epoch % validation_interval == 0 or epoch == total_epochs:
                 val_metrics = self.validate()
-                summary_dict.update(val_metrics)
+                summary_dict.update({
+                    "val_MSE_teacher": val_metrics["MSE_teacher"],
+                    "val_MSE_student": val_metrics["MSE_student"]
+                })
+
+                # Save best teacher model
+                val_loss = val_metrics["MSE_teacher"]
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_teacher_state = deepcopy(self.teacher_model.state_dict())
+
                 pbar.set_postfix(summary_dict)
-                results.append(val_metrics["val_MSE_teacher"])
-                results.append(val_metrics["val_MSE_student"])
+                results.append(val_metrics["MSE_teacher"])
+                results.append(val_metrics["MSE_student"])
 
             self.logger.log_dict(summary_dict, step=epoch)
 
-            if isinstance(self.scheduler, ReduceLROnPlateau):
-                if 'val_MSE_teacher' in val_metrics:
-                    self.scheduler.step(val_metrics['val_MSE_teacher'])
-            else:
-                self.scheduler.step()
+            self.scheduler.step()
 
-        return results
+        # After training, load the best teacher model
+        self.teacher_model.load_state_dict(best_teacher_state)
+        print(f"Best validation teacher MSE: {best_val_loss:.4f}")
+
+        # Evaluate on test set with best teacher
+        test_metrics = self.test()
+        print(f"Test MSE (best teacher) - Teacher: {test_metrics['MSE_teacher']:.6f}, Student: {test_metrics['MSE_student']:.6f}")
+
+        return results, test_metrics
+
     
 def add_noise_(data, sigma):
     noisy_data = copy(data)
